@@ -1,3 +1,4 @@
+
 package com.petsalud.backendpetsalud.service;
 
 import com.petsalud.backendpetsalud.entity.Cita;
@@ -6,8 +7,9 @@ import com.petsalud.backendpetsalud.entity.Usuario;
 import com.petsalud.backendpetsalud.repository.CitaRepository;
 import com.petsalud.backendpetsalud.repository.MascotaRepository;
 import com.petsalud.backendpetsalud.repository.UsuarioRepository;
-import com.petsalud.backendpetsalud.service.CitaService;
+
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
@@ -26,15 +28,39 @@ public class CitaServiceImpl implements CitaService {
     @Autowired
     private UsuarioRepository usuarioRepository;
 
+    @Autowired
+    private AutorizacionPropietarioService autorizacionPropietarioService;
+
+    private void validarAccesoACita(Cita cita) {
+
+        if (cita.getMascota() == null
+                || cita.getMascota().getPropietario() == null) {
+
+            throw new AccessDeniedException(
+                    "La cita no tiene un propietario válido"
+            );
+        }
+
+        autorizacionPropietarioService.validarAccesoAPropietario(
+                cita.getMascota().getPropietario().getId()
+        );
+    }
+
     @Override
-    public Cita agendarCita(Long mascotaId, Long veterinarioId, LocalDateTime fechaHora, String motivo) {
+    public Cita agendarCita(Long mascotaId, Long veterinarioId,
+                           LocalDateTime fechaHora, String motivo) {
+
         Mascota mascota = mascotaRepository.findById(mascotaId)
-                .orElseThrow(() -> new IllegalArgumentException("Mascota no encontrada"));
+                .orElseThrow(() ->
+                        new IllegalArgumentException("Mascota no encontrada"));
+
+        autorizacionPropietarioService.validarAccesoAPropietario(
+                mascota.getPropietario().getId()
+        );
 
         Usuario veterinario = usuarioRepository.findById(veterinarioId)
-                .orElseThrow(() -> new IllegalArgumentException("Veterinario no encontrado"));
-
-        // Opcional: Verificar disponibilidad del veterinario en ese horario
+                .orElseThrow(() ->
+                        new IllegalArgumentException("Veterinario no encontrado"));
 
         Cita cita = Cita.builder()
                 .mascota(mascota)
@@ -49,35 +75,70 @@ public class CitaServiceImpl implements CitaService {
 
     @Override
     public Optional<Cita> obtenerCitaPorId(Long id) {
-        return citaRepository.findById(id);
+
+        return citaRepository.findById(id).map(cita -> {
+
+            validarAccesoACita(cita);
+
+            return cita;
+        });
     }
 
     @Override
     public Cita actualizarEstadoCita(Long id, String nuevoEstado) {
+
         return citaRepository.findById(id).map(cita -> {
+
+            // valdamos antes de modificar el estado
+            validarAccesoACita(cita);
+
             cita.setEstado(nuevoEstado);
+
             return citaRepository.save(cita);
-        }).orElseThrow(() -> new IllegalArgumentException("Cita no encontrada"));
+
+        }).orElseThrow(() ->
+                new IllegalArgumentException("Cita no encontrada"));
     }
 
     @Override
     public void cancelarCita(Long id) {
-        citaRepository.deleteById(id);
+
+        Cita cita = citaRepository.findById(id)
+                .orElseThrow(() ->
+                        new IllegalArgumentException("Cita no encontrada"));
+
+        validarAccesoACita(cita);
+
+        citaRepository.delete(cita);
     }
 
     @Override
     public List<Cita> listarCitasPorMascota(Long mascotaId) {
+
+        Mascota mascota = mascotaRepository.findById(mascotaId)
+                .orElseThrow(() ->
+                        new IllegalArgumentException("Mascota no encontrada"));
+
+        // comprobamos que el user pueda consultar las citas de esta mascota.
+        autorizacionPropietarioService.validarAccesoAPropietario(
+                mascota.getPropietario().getId()
+        );
+
         return citaRepository.findByMascotaId(mascotaId);
     }
 
+    // Estas consultas generales deben restringirse a EMPLEADO y GERENTE en SecurityConfig
+
     @Override
     public List<Cita> listarCitasPorVeterinario(Long veterinarioId) {
+
         return citaRepository.findByVeterinarioId(veterinarioId);
     }
 
     @Override
-    public List<Cita> listarCitasEntreFechas(LocalDateTime inicio, LocalDateTime fin) {
+    public List<Cita> listarCitasEntreFechas(
+            LocalDateTime inicio, LocalDateTime fin) {
+
         return citaRepository.findByFechaHoraBetween(inicio, fin);
     }
 }
-
